@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coilbound - Arena Coil</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  #game-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+  }
+  canvas {
+    display: block;
+    background: #111;
+  }
+  #ui {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+  #start-screen {
+    background: rgba(20, 25, 30, 0.95);
+    border-radius: 16px;
+    padding: 32px 40px;
+    max-width: 420px;
+    text-align: center;
+    pointer-events: auto;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    border: 1px solid #2a2a2a;
+  }
+  #start-screen h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+  }
+  #start-screen .subtitle {
+    font-size: 0.75rem;
+    color: #888;
+    letter-spacing: 2px;
+    margin-bottom: 20px;
+  }
+  #start-screen p {
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: #bbb;
+    margin-bottom: 24px;
+  }
+  .controls {
+    text-align: left;
+    font-size: 0.9rem;
+    color: #aaa;
+    margin-bottom: 28px;
+  }
+  .controls div {
+    display: flex;
+    justify-content: space-between;
+    margin: 6px 0;
+  }
+  .controls span:first-child { color: #888; }
+  button {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 10px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 10px;
+  }
+  #start-btn {
+    background: #e8e8e8;
+    color: #111;
+  }
+  #start-btn:hover { background: #fff; }
+  #levels-btn {
+    background: #1a1a1a;
+    color: #ccc;
+    border: 1px solid #333;
+  }
+  #levels-btn:hover { background: #252525; }
+  #hud {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    font-size: 0.95rem;
+    color: #ccc;
+    pointer-events: none;
+    display: none;
+  }
+  #game-over {
+    display: none;
+    background: rgba(15, 15, 20, 0.92);
+    border-radius: 16px;
+    padding: 36px 48px;
+    text-align: center;
+    pointer-events: auto;
+  }
+  #game-over h2 { font-size: 2rem; margin-bottom: 12px; }
+  #game-over p { color: #aaa; margin-bottom: 24px; }
+</style>
+</head>
+<body>
+<div id="game-container">
+  <canvas id="c"></canvas>
+  <div id="ui">
+    <div id="start-screen">
+      <div class="subtitle">ARENA COIL</div>
+      <h1>Coilbound</h1>
+      <p>Grow from a short coil. Eat motes, outlast rival snakes, and claim the banner. Crash into a body and you burst into motes anyone can eat.</p>
+      <div class="controls">
+        <div><span>Turn</span><span>A / D or arrows</span></div>
+        <div><span>Boost</span><span>W / Up</span></div>
+        <div><span>Brake</span><span>S / Down</span></div>
+      </div>
+      <button id="start-btn">▶ Start</button>
+      <button id="levels-btn">⌂ Levels</button>
+    </div>
+    <div id="game-over">
+      <h2>You Burst!</h2>
+      <p id="final-score">Score: 0</p>
+      <button id="restart-btn">Play Again</button>
+    </div>
+  </div>
+  <div id="hud">Length: <span id="len">0</span> | Score: <span id="score">0</span></div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Game state
+let running = false;
+let player, aiSnakes = [], motes = [], banner = null;
+let score = 0;
+let keys = {};
+
+// Controls
+window.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault();
+});
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+class Snake {
+  constructor(x, y, color, isPlayer = false) {
+    this.segments = [];
+    for (let i = 0; i < 12; i++) {
+      this.segments.push({ x: x - i * 8, y: y });
+    }
+    this.angle = 0;
+    this.speed = 2.8;
+    this.baseSpeed = 2.8;
+    this.boost = false;
+    this.brake = false;
+    this.color = color;
+    this.isPlayer = isPlayer;
+    this.alive = true;
+    this.turnSpeed = 0.07;
+  }
+  get head() { return this.segments[0]; }
+  get length() { return this.segments.length; }
+
+  update() {
+    if (!this.alive) return;
+
+    // Player controls
+    if (this.isPlayer) {
+      if (keys['a'] || keys['arrowleft']) this.angle -= this.turnSpeed;
+      if (keys['d'] || keys['arrowright']) this.angle += this.turnSpeed;
+      this.boost = keys['w'] || keys['arrowup'];
+      this.brake = keys['s'] || keys['arrowdown'];
+    } else {
+      // Simple AI
+      this.aiThink();
+    }
+
+    let spd = this.baseSpeed;
+    if (this.boost) spd *= 1.7;
+    if (this.brake) spd *= 0.45;
+    this.speed = spd;
+
+    // Move head
+    const hx = this.head.x + Math.cos(this.angle) * this.speed;
+    const hy = this.head.y + Math.sin(this.angle) * this.speed;
+
+    // Wrap around edges
+    const nx = ((hx % W) + W) % W;
+    const ny = ((hy % H) + H) % H;
+
+    this.segments.unshift({ x: nx, y: ny });
+
+    // Keep length (grow only when eating)
+    while (this.segments.length > this.targetLength) {
+      this.segments.pop();
+    }
+  }
+
+  aiThink() {
+    // Seek nearest mote or avoid player
+    let target = null;
+    let minD = Infinity;
+    for (const m of motes) {
+      const d = dist(this.head, m);
+      if (d < minD) { minD = d; target = m; }
+    }
+    if (target) {
+      const desired = Math.atan2(target.y - this.head.y, target.x - this.head.x);
+      let diff = desired - this.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      this.angle += Math.sign(diff) * Math.min(Math.abs(diff), this.turnSpeed * 1.2);
+    }
+    // occasional boost
+    this.boost = Math.random() < 0.02;
+  }
+
+  grow(n = 3) {
+    this.targetLength = (this.targetLength || this.segments.length) + n;
+  }
+
+  draw() {
+    if (!this.alive) return;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // body
+    for (let i = this.segments.length - 1; i >= 0; i--) {
+      const s = this.segments[i];
+      const r = Math.max(4, 10 - i * 0.08);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      const alpha = 1 - i / this.segments.length * 0.4;
+      ctx.fillStyle = this.isPlayer
+        ? `rgba(100, 200, 255, ${alpha})`
+        : `rgba(${this.color}, ${alpha})`;
+      ctx.fill();
+    }
+    // head glow
+    ctx.beginPath();
+    ctx.arc(this.head.x, this.head.y, 12, 0, Math.PI * 2);
+    ctx.fillStyle = this.isPlayer ? 'rgba(150, 220, 255, 0.3)' : 'rgba(255,100,100,0.25)';
+    ctx.fill();
+  }
+}
+
+function dist(a, b) {
+  const dx = a.x - b.x, dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function spawnMote(x, y, value = 1) {
+  motes.push({
+    x: x ?? Math.random() * W,
+    y: y ?? Math.random() * H,
+    r: 3 + Math.random() * 2,
+    value,
+    color: `hsl(${Math.random() * 60 + 40}, 80%, 60%)`
+  });
+}
+
+function burstSnake(snake) {
+  snake.alive = false;
+  // turn into motes
+  for (let i = 0; i < snake.segments.length; i += 2) {
+    const s = snake.segments[i];
+    spawnMote(s.x, s.y, 2);
+  }
+  if (snake.isPlayer) {
+    endGame();
+  }
+}
+
+function checkCollisions() {
+  // player vs AI bodies
+  if (!player.alive) return;
+  for (const ai of aiSnakes) {
+    if (!ai.alive) continue;
+    // player head hits AI body
+    for (let i = 4; i < ai.segments.length; i++) {
+      if (dist(player.head, ai.segments[i]) < 12) {
+        burstSnake(player);
+        return;
+      }
+    }
+    // AI head hits player body
+    for (let i = 4; i < player.segments.length; i++) {
+      if (dist(ai.head, player.segments[i]) < 12) {
+        burstSnake(ai);
+        score += 50 + ai.length * 2;
+        break;
+      }
+    }
+  }
+  // self collision (mild)
+  for (let i = 12; i < player.segments.length; i++) {
+    if (dist(player.head, player.segments[i]) < 10) {
+      // just slow a bit, not die
+      player.speed *= 0.7;
+    }
+  }
+}
+
+function eatMotes(snake) {
+  for (let i = motes.length - 1; i >= 0; i--) {
+    const m = motes[i];
+    if (dist(snake.head, m) < 14) {
+      snake.grow(m.value + 1);
+      if (snake.isPlayer) score += m.value * 10;
+      motes.splice(i, 1);
+    }
+  }
+}
+
+function initGame() {
+  player = new Snake(W / 2, H / 2, null, true);
+  player.targetLength = 12;
+  aiSnakes = [];
+  for (let i = 0; i < 5; i++) {
+    const ai = new Snake(
+      Math.random() * W,
+      Math.random() * H,
+      `${150 + Math.random()*80},${80 + Math.random()*50},${80 + Math.random()*50}`
+    );
+    ai.targetLength = 10 + Math.random() * 15;
+    aiSnakes.push(ai);
+  }
+  motes = [];
+  for (let i = 0; i < 80; i++) spawnMote();
+  score = 0;
+  running = true;
+  document.getElementById('start-screen').style.display = 'none';
+  document.getElementById('game-over').style.display = 'none';
+  document.getElementById('hud').style.display = 'block';
+}
+
+function endGame() {
+  running = false;
+  document.getElementById('final-score').textContent = `Score: ${score}  |  Length: ${player.length}`;
+  document.getElementById('game-over').style.display = 'block';
+  document.getElementById('hud').style.display = 'none';
+}
+
+function update() {
+  if (!running) return;
+
+  player.update();
+  aiSnakes.forEach(s => s.update());
+
+  eatMotes(player);
+  aiSnakes.forEach(s => eatMotes(s));
+
+  checkCollisions();
+
+  // keep mote count
+  while (motes.length < 70) spawnMote();
+
+  // remove dead AI
+  aiSnakes = aiSnakes.filter(s => s.alive);
+  if (aiSnakes.length < 4 && Math.random() < 0.01) {
+    const ai = new Snake(Math.random() * W, Math.random() * H,
+      `${150 + Math.random()*80},${80 + Math.random()*50},${80 + Math.random()*50}`);
+    ai.targetLength = 8 + Math.random() * 12;
+    aiSnakes.push(ai);
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, W, H);
+
+  // subtle grid
+  ctx.strokeStyle = 'rgba(40,40,50,0.3)';
+  ctx.lineWidth = 1;
+  const grid = 80;
+  for (let x = 0; x < W; x += grid) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += grid) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // motes
+  for (const m of motes) {
+    ctx.beginPath();
+    ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+    ctx.fillStyle = m.color;
+    ctx.fill();
+  }
+
+  // snakes
+  aiSnakes.forEach(s => s.draw());
+  if (player) player.draw();
+
+  // HUD update
+  if (player) {
+    document.getElementById('len').textContent = player.length;
+    document.getElementById('score').textContent = score;
+  }
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+document.getElementById('start-btn').onclick = initGame;
+document.getElementById('restart-btn').onclick = initGame;
+document.getElementById('levels-btn').onclick = () => alert('Levels coming soon!\n目前只有無盡模式');
+
+loop();
+</script>
+</body>
+</html>
